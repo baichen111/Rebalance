@@ -12,6 +12,7 @@ class TradingApp(EWrapper, EClient):
     def __init__(self,cash = 0.001):
         EClient.__init__(self,self)
         self.cash = cash
+        
         self.connect("127.0.0.1",7497,clientId=2)
         # starting a separate daemon thread to execute the websocket connection
         conn_thread = threading.Thread(target=self.websocket_conn,daemon=True)
@@ -50,8 +51,10 @@ class TradingApp(EWrapper, EClient):
         
     def position(self, account, contract, position, avgCost):
         super().position(account, contract, position, avgCost)
-        self.pos[contract.symbol] = position
-        self.symbols.append(contract.symbol)
+        if int(position) != 0:
+            self.pos[contract.symbol] = int(position)
+            if contract.symbol not in self.symbols:
+                self.symbols.append(contract.symbol)
     
     def positionEnd(self):
         super().positionEnd()
@@ -65,17 +68,22 @@ class TradingApp(EWrapper, EClient):
     def accountSummaryEnd(self, reqId: int):
         super().accountSummaryEnd(reqId)
         self.acc_event.set()
-        
-    def reAllocate(self):
+           
+    def requestInfo(self):
         self.reqPositions()   #request current positions information
         self.pos_event.wait()
         self.reqAccountSummary(self.nextValidOrderId,"All","$LEDGER:USD")   #request account information
         self.acc_event.wait()
         
+    def reAllocate(self):
+        self.requestInfo()
+        
+        #calculate new asset allocation
         TotalEquity = float(self.account_info["TotalCashBalance"]) + float(self.account_info["StockMarketValue"])
         asset_weight = (1 - self.cash) / len(self.pos)
         new_alloc = int(TotalEquity * asset_weight)
         
+        #request latest trade price for each symbol
         for s in self.symbols:
             self.hist_event.clear()
             self.reqHistoricalData(self.symbols.index(s),self.StockContract(s),
@@ -89,6 +97,7 @@ class TradingApp(EWrapper, EClient):
                                    chartOptions=[])
             self.hist_event.wait()  # wait until current historical data request completes
 
+        #calculate selling and buying amount
         for s in self.symbols:
             upd_pos = int(new_alloc/self.ltp[s])
             if upd_pos > self.pos[s]:
@@ -128,21 +137,22 @@ class TradingApp(EWrapper, EClient):
         contract.exchange = exchange
         return contract  
     
-    #to be done
-    def addStock(self,symbol:str):  # add a new stock to portfolio
-        pass
-    #to be done
-    def removeStock(self,symbol:str): # remove a stock from portfolio
-        pass
-    
+    def sellStock(self,symbol): # sell one single stock
+        self.requestInfo()
+        if symbol not in self.pos or self.pos[symbol] == 0:
+            return
+        self.placeOrder(self.nextValidOrderId,self.StockContract(symbol),self.StockMktOrder(int(self.pos[symbol]),"SELL"))
+        
+    def buyStock(self,symbol,quantity):  # buy one single stock
+        self.placeOrder(self.nextValidOrderId,self.StockContract(symbol),self.StockMktOrder(quantity,"BUY"))
+        
     def websocket_conn(self):
         self.run()
          
-
 if __name__ == "__main__":
     app = TradingApp()         
-    time.sleep(1)   
-    app.reAllocate()
-    print(app.pos)
-    print("account information: ",app.account_info)
-    app.placeUpdOrder()
+    # app.reAllocate()
+    # print(app.pos)
+    # print("account information: ",app.account_info)
+    # app.placeUpdOrder()
+    app.buyStock("TSLA",100)
