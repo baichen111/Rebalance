@@ -1,3 +1,6 @@
+"""
+Rebalance current portfolio to equal weight,using Alpaca api
+"""
 import alpaca_trade_api as tradeapi
 import requests
 import json
